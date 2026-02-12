@@ -1,0 +1,540 @@
+Deploying TETRIS using CI / CD DevSecOps ARGOCD
+========================================
+Step 1: Setting up AWS EC2 Instance
+----------------------------------
+Creating an EC2 instance t2.large with Ubuntu 24 AMI, t2.large, and 50 GB storage
+Assigning an IAM role with Admin access
+Step 2: Installation of Required Tools on the Instance
+------------------------------------------------------
+Docker
+Jenkins
+Java
+SonarQube container
+AWS CLI
+Kubectl
+Terraform
+Step 3: Jenkins Job Configuration
+-----------------------------------
+Creating Jenkins jobs for:
+========================
+Job 1: Creating an EKS cluster
+Job 2: Deploying the Tetris Game application
+Configuring the Jenkins job stages:
+-----------------------------------
+Sending files to SonarQube for static code analysis
+Running npm install
+Implementing OWASP for security checks
+Installing and running Docker Scout for container security
+Scanning files and Docker images with Docker Scout
+Building and pushing Docker images
+Deploying the application to the EKS cluster
+
+
+
+==================================
+Process
+=================================
+Script1 for Java,Jenkins,Docker
+vi script1.sh
+#!/bin/bash
+sudo apt update -y
+wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee /etc/apt/keyrings/adoptium.asc
+echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list
+sudo apt update -y
+sudo apt install temurin-17-jdk -y
+/usr/bin/java --version
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/ | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+sudo apt-get update -y
+sudo apt-get install jenkins -y
+sudo systemctl start jenkins
+#install docker
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl gnupg -y
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
+sudo usermod -aG docker ubuntu
+newgrp docker
+===========================================
+http://ip:8080
+
+
+
+
+Script 2 for Terraform, kubectl, AWS cli, trivy
+vi script2.sh
+#!/bin/bash
+#install terraform
+sudo apt install wget -y
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install terraform
+#install Kubectl on Jenkins
+sudo apt update
+sudo apt install curl -y
+curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+kubectl version --client
+#install Aws cli
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+sudo apt-get install unzip -y
+unzip awscliv2.zip
+sudo ./aws/install
+#install trivy
+sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+sudo apt-get update
+sudo apt-get install trivy
+=======================================================
+Now Run sonarqube container
+sudo chmod 777 /var/run/docker.sock
+systemctl daemon-reload
+systemctl restart docker.service
+docker run -d --name sonar -p 9000:9000 sonarqube:lts-community
+http://ip:9000
+username:admin, password: admin
+Step 3: Jenkins Job Configuration
+=================================
+Job 1: EKS Provision
+-----------------------
+First change the bucketname in the backend.tf ( devsecops-Tetris-V1/EKS_TERRAFORM/backend.tf ) 
+Install terraform plugin
+let’s find the path to our Terraform (we will use it in the tools section of Terraform)
+
+In EC2 instance run the below command
+which terraform 
+Now --> Manage Jenkins –> Tools
+
+Terraform --> Name: terraform, uncheck install automatically , install directory = /usr/bin/
+Now create a new pipeline job for the Eks provision
+------------------------------------------
+New Item --> Pipeline --> EKSJOB 
+This project is parameterized
+Name: action
+choices: 
+ apply
+ destroy
+pipeline{
+    agent any
+    stages {
+        stage('Checkout from Git'){
+            steps{
+                git branch: 'main', url: 'https://github.com/ReyazShaik/devsecops-Tetris-V1.git'
+            }
+        }
+        stage('Terraform version'){
+             steps{
+                 sh 'terraform --version'
+             }
+        }
+        stage('Terraform init'){
+             steps{
+                 dir('EKS_TERRAFORM') {
+                      sh 'terraform init'
+                   }
+             }
+        }
+        stage('Terraform validate'){
+             steps{
+                 dir('EKS_TERRAFORM') {
+                      sh 'terraform validate'
+                   }
+             }
+        }
+        stage('Terraform plan'){
+             steps{
+                 dir('EKS_TERRAFORM') {
+                      sh 'terraform plan'
+                   }
+             }
+        }
+        stage('Terraform apply/destroy'){
+             steps{
+                 dir('EKS_TERRAFORM') {
+                      sh 'terraform ${action} --auto-approve'
+                   }
+             }
+        }
+    }
+}
+Create a another pipeline Tetris Game job
+---------------------------------------
+Plugins installation & setup (Java, Sonar, Nodejs, owasp, Docker)
+-----------------------------------------------------------------
+Go to Jenkins dashboard
+Manage Jenkins –> Plugins –> Available Plugins
+
+Search for the Below Plugins
+Eclipse Temurin installer
+Sonarqube Scanner
+NodeJs
+Owasp Dependency-Check
+Docker
+Docker Commons
+Docker Pipeline
+Docker API
+Docker-build-step
+Goto Manage Jenkins → Tools → 
+
+JDK installations --> Add JDK --> Name: jdk23, remove install oracle and add Install from adoptium.net and select jdk 23 (install automatically)
+SonarQube Scanner installations --> Add SonarQube Scanner --> Name=sonar-scanner, install automatically --> version: sonarscanner 7.0 latest
+NodeJS installations --> Add NodeJS --> Name= node23--> install automatically --> install from nodejs.org -> version nodejs 23
+Dependency-Check installations --> Name = DP-Check --> install automatically --> Add installer --> select GitHub --> latest
+Docker installations --> Name = docker --> install automatically --> Add installer --> select docker.com --> latest
+Configure Sonar Server in Manage Jenkins
+==========================================
+Go to your Sonarqube Server. http://ip:9000
+Click on Administration → Security → Users → Click on Tokens and Update Token → Give it a name TetrisVersion1.0 → and click on Generate Token
+
+squ_077f99ae437b40f588ab908d861dce2dd3c0c2de
+Goto Jenkins Dashboard → Manage Jenkins → Credentials → Add Secret Text.
+Kind = Secret Text
+Scope = Global
+Secret = Paste the sonar key you copied
+ID = sonar-token
+Desc = sonar-token
+
+Adding sonar server details in Jenkins
+---------------------------------
+Now, go to Dashboard → Manage Jenkins → System --> SonarQube servers
+Name = sonar-server
+Server URL = http://35.154.52.225:9000
+Server authentication token = sonar-token that you created in credentials
+In the Sonarqube Dashboard add a quality gate
+------------------------------------------
+Administration–> Configuration–>Webhooks --> create 
+Name = Jenkins
+URL = http://35.154.52.225:8080/sonarqube-webhook/
+Secret = empty
+Add Docker credentials to the Jenkins to log in and push the image
+----------------------------------------------------------------
+Manage Jenkins –> Credentials –> global –> add credential
+
+Kind = Username and password
+Username= trainerreyaz
+password = ****
+ID = docker
+Desc = docker
+Lets create a pipeline to create docker image and containers using real application tetris
+==========================================================================================
+Create a TETRISV1 Pipeline
+-------------------------
+pipeline{
+    agent any
+    tools{
+        jdk 'jdk23'
+        nodejs 'node23'
+    }
+    environment {
+        SCANNER_HOME=tool 'sonar-scanner'
+    }
+    stages {
+        stage('Checkout from Git'){
+            steps{
+                git branch: 'main', url: 'https://github.com/ReyazShaik/devsecops-Tetris-V1.git'
+            }
+        }
+        stage("Sonarqube Analysis "){
+            steps{
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=TetrisVersion1.0  \
+                    -Dsonar.projectKey=TetrisVersion1.0'''
+                }
+            }
+        }
+        stage("Quality Gate"){
+           steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                sh "npm install"
+            }
+        }
+        stage("Docker Build & Push"){
+            steps{
+                script{
+                   withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){
+                       sh "docker build -t tetris ."
+                       sh "docker tag tetris trainerreyaz/tetrisv1:latest "
+                       sh "docker push trainerreyaz/tetrisv1:latest"
+                    }
+                }
+            }
+        }
+        stage("TRIVY"){
+            steps{
+                sh "trivy image trainerreyaz/tetrisv1:latest > trivyimage.txt" 
+            }
+        }
+    }
+}
+Lets create a GitHub token from GitHub console
+-------------------------------------------------
+GitHub --> Settings --> Developer Settings --> Personal Access Tokens --> Tokens CLassic --> Generate TOken --> name = Jenkins --> click on all checkboxes
+Manage Jenkins –> credentials –> Global --> Add credential
+Kind = Secret Text
+Secret = paste the token here
+iD = github
+Desc = github
+
+Let’s add the Image Updater stage to the Pipeline
+------------------------------------------------
+
+pipeline{
+    agent any
+    tools{
+        jdk 'jdk23'
+        nodejs 'node23'
+    }
+    environment {
+        SCANNER_HOME=tool 'sonar-scanner'
+        GIT_REPO_NAME = "devsecops-Tetris-manifest"
+        GIT_USER_NAME = "ReyazShaik"
+    }
+    stages {
+        stage('clean workspace'){
+            steps{
+                cleanWs()
+            }
+        }
+        stage('Checkout from Git'){
+            steps{
+                git branch: 'main', url: 'https://github.com/ReyazShaik/devsecops-Tetris-V1.git'
+            }
+        }
+        stage("Sonarqube Analysis "){
+            steps{
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=TetrisVersion1.0 \
+                    -Dsonar.projectKey=TetrisVersion1.0 '''
+                }
+            }
+        }
+        stage("Quality Gate"){
+           steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                sh "npm install"
+            }
+        }
+        stage('TRIVY FS SCAN') {
+            steps {
+                sh "trivy fs . > trivyfs.txt"
+            }
+        }
+        stage("Docker Build & Push"){
+            steps{
+                script{
+                   withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){
+                       sh "docker build -t tetrisv1 ."
+                       sh "docker tag tetrisv1 trainerreyaz/tetrisv1:latest "
+                       sh "docker push trainerreyaz/tetrisv1:latest "
+                    }
+                }
+            }
+        }
+        stage("TRIVY"){
+            steps{
+                sh "trivy image trainerreyaz/tetrisv1:latest > trivyimage.txt"
+            }
+        }
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/ReyazShaik/devsecops-Tetris-manifest.git'
+            }
+        }
+        stage('Update Deployment File') {
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+                       NEW_IMAGE_NAME = "trainerreyaz/tetrisv1:latest"
+                       sh "sed -i 's|image: .*|image: $NEW_IMAGE_NAME|' deployment.yml"
+                       sh "git config --global user.email 'reyaz@gmail.com'"
+                       sh "git config --global user.name 'reyaz'"
+                       sh 'git add deployment.yml'
+                       sh "git commit -m 'Update deployment image to $NEW_IMAGE_NAME'"
+                       sh "git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main"
+                    }
+                }
+            }
+        }
+    }
+}
+Click on Apply and save and Run the Build
+Go to the below repo
+https://github.com/ReyazShaik/devsecops-Tetris-manifest
+under this repo, deployment.yml is there, inside this file, Jenkins has automatically updated image to latest, see commits
+Let’s Update the kubeconfig
+============================
+
+Go to Jenkins instance SSH and enter the below command
+aws eks update-kubeconfig --name EKS_CLUSTER --region ap-south-1
+kubectl get nodes
+cat /root/.kube/config
+Install Kubernetes Plugin
+----------------------
+Kubernetes Credentials
+Kubernetes Client API
+Kubernetes
+Kubernetes CLI
+goto manage Jenkins –> manage credentials –> Click on Jenkins global –> add credentials
+
+Kind= SEcret File
+choose = secret.txt
+ID: k8s
+desc : k8s
+ARGOCD SETUP
+==============
+Let’s install ArgoCD
+
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.4.7/manifests/install.yaml
+By default, argocd-server is not publicly exposed. For this project, we will use a Load Balancer to make it usable:
+kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+Wait about 2 minutes for the LoadBalancer creation
+sudo apt install jq -y
+or
+kubectl get svc -n argocd
+export ARGOCD_SERVER='kubectl get svc argocd-server -n argocd -o json | jq --raw-output '.status.loadBalancer.ingress[0].hostname''
+If you run above command you will get the load balancer external IP
+Login
+The command you provided is used to extract the password for the initial admin user of ArgoCD, decode it from base64 encoding, and store it in an environment variable named ARGO_PWD.
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+No need
+-------
+export ARGO_PWD='kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d'
+echo $ARGO_PWD
+echo $ARGOCD_SERVER
+Open the load balancer, username: admin, password: echo $ARGO_PWD
+Now click on the Setting gear icon in the left side panel --> Click on Repositories --> Now click on Connect Repo Using HTTPS
+Add Github details,
+Type = git, 
+Project = default 
+provide the GitHub URL = https://github.com/ReyazShaik/devsecops-Tetris-manifest.git
+Connect
+Click on Manage Your application --> New App
+Application Name = tetris
+Project Name = Default
+SYNC Policy = Automatic
+Repository URL = https://github.com/ReyazShaik/devsecops-Tetris-manifest.git
+REvision = HEAD
+Path = ./
+Cluster URL = https://kubernetes.default.svc
+NameSpace = default
+Click on Create. You can see our app is created in Argo-cd
+Click on tetris and it will create another load balancer in AWS. Based on the deployment.yml it will setup entire infra
+Go inside tetris --> tetris-service -- click here -- it will give hostname = a5dbd72c9726243348bcbf7aa74c1221-910395752.ap-south-1.elb.amazonaws.com
+Open the load balancer in browser
+kubectl get all
+=======================================
+Now Version 2.0, How to update the application to Version 2.0
+Create a Seperate Pipeline , idea is with new code in GitHub we update the image in dockerhub and that will be updated to deployment.yml manifest . AS this is updated automatically ArgoCD will deploy . lets see
+In the below pipeline, i have update all to 2.0 instead 1.0 and git repo got change to latest code repo
+pipeline{
+    agent any
+    tools{
+        jdk 'jdk23'
+        nodejs 'node23'
+    }
+    environment {
+        SCANNER_HOME=tool 'sonar-scanner'
+        GIT_REPO_NAME = "devsecops-Tetris-manifest"
+        GIT_USER_NAME = "ReyazShaik"
+    }
+    stages {
+        stage('clean workspace'){
+            steps{
+                cleanWs()
+            }
+        }
+        stage('Checkout from Git'){
+            steps{
+                git branch: 'main', url: 'https://github.com/ReyazShaik/devsecops-tetris-v2.git'
+            }
+        }
+        stage("Sonarqube Analysis "){
+            steps{
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=TetrisVersion2.0 \
+                    -Dsonar.projectKey=TetrisVersion2.0 '''
+                }
+            }
+        }
+        stage("Quality Gate"){
+           steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                sh "npm install"
+            }
+        }
+        stage('TRIVY FS SCAN') {
+            steps {
+                sh "trivy fs . > trivyfs.txt"
+            }
+        }
+        stage("Docker Build & Push"){
+            steps{
+                script{
+                   withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){
+                       sh "docker build -t tetrisv2 ."
+                       sh "docker tag tetrisv2 trainerreyaz/tetrisv2:latest "
+                       sh "docker push trainerreyaz/tetrisv2:latest "
+                    }
+                }
+            }
+        }
+        stage("TRIVY"){
+            steps{
+                sh "trivy image trainerreyaz/tetrisv2:latest > trivyimage.txt"
+            }
+        }
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/ReyazShaik/devsecops-Tetris-manifest.git'
+            }
+        }
+        stage('Update Deployment File') {
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+                       NEW_IMAGE_NAME = "trainerreyaz/tetrisv2:latest"
+                       sh "sed -i 's|image: .*|image: $NEW_IMAGE_NAME|' deployment.yml"
+                       sh "git config --global user.email 'reyaz@gmail.com'"
+                       sh "git config --global user.name 'reyaz'"
+                       sh "git add deployment.yml"
+                       sh "git commit -m 'Update deployment image to $NEW_IMAGE_NAME'"
+                       sh "git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main"
+                    }
+                }
+            }
+        }
+    }
+}
+See now deployment.yml in https://github.com/ReyazShaik/devsecops-Tetris-manifest.git  got changed to v2
+and also see ArgoCD pods
+and refresh the load balancer
+FYI: find / -name trivyimage.txt  [Trivy report will be under jenkins pipeline workspace] - yes
